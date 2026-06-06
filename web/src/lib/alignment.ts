@@ -1,10 +1,9 @@
 /**
  * Text alignment engine for ASR-to-script matching.
  *
- * Uses a sliding window + anchor strategy:
- * 1. Find longest common subsequence anchors in recognized text
- * 2. Use anchors to estimate position in the source script
- * 3. Fine-tune with character-level resync around anchors
+ * Uses bigram (2-char sequence) sliding window matching:
+ * Bigrams are robust to single-character ASR errors (homophones)
+ * because adjacent pairs usually still match.
  */
 
 export interface AlignmentResult {
@@ -19,8 +18,38 @@ function normalize(text: string): string {
 }
 
 /**
- * Find the best match position of `needle` inside `haystack`.
- * Returns the start index in haystack, or -1 if not found.
+ * Generate bigrams (2-char sliding sequences) from text.
+ * "abcdef" → ["ab", "bc", "cd", "de", "ef"]
+ */
+function bigrams(text: string): string[] {
+  const result: string[] = [];
+  for (let i = 0; i < text.length - 1; i++) {
+    result.push(text.slice(i, i + 2));
+  }
+  return result;
+}
+
+/**
+ * Score how well `needle` matches at position `pos` in `haystack`
+ * using bigram overlap. Returns 0-1.
+ */
+function bigramScore(haystack: string, needle: string, pos: number): number {
+  let match = 0;
+  let total = 0;
+  for (let i = 0; i < needle.length - 1; i++) {
+    if (pos + i + 1 >= haystack.length) break;
+    total++;
+    const ng = needle.slice(i, i + 2);
+    const hg = haystack.slice(pos + i, pos + i + 2);
+    if (ng === hg) match++;
+  }
+  return total > 0 ? match / total : 0;
+}
+
+/**
+ * Find the best match position of `needle` inside `haystack`
+ * using bigram scoring. Searches within a window around `startFrom`
+ * to avoid false matches at distant positions.
  */
 function fuzzyFind(haystack: string, needle: string, startFrom: number): number {
   if (needle.length === 0) return startFrom;
@@ -29,24 +58,24 @@ function fuzzyFind(haystack: string, needle: string, startFrom: number): number 
   const exactIdx = haystack.indexOf(needle, startFrom);
   if (exactIdx !== -1) return exactIdx;
 
-  // Try sliding window with character overlap scoring
+  // Bigram sliding window search
+  // Constrain search range to avoid false matches far from expected position
+  const searchStart = Math.max(0, startFrom - needle.length);
+  const searchEnd = Math.min(haystack.length - needle.length, startFrom + needle.length * 3);
+
   let bestIdx = -1;
   let bestScore = 0;
-  const windowSize = needle.length;
 
-  for (let i = startFrom; i <= haystack.length - windowSize; i += 1) {
-    let score = 0;
-    for (let j = 0; j < windowSize; j++) {
-      if (haystack[i + j] === needle[j]) score++;
-    }
-    const ratio = score / windowSize;
-    if (ratio > bestScore && ratio >= 0.5) {
-      bestScore = ratio;
+  for (let i = searchStart; i <= searchEnd; i++) {
+    const score = bigramScore(haystack, needle, i);
+    if (score > bestScore) {
+      bestScore = score;
       bestIdx = i;
     }
   }
 
-  return bestIdx;
+  // Require at least 60% bigram overlap
+  return bestScore >= 0.6 ? bestIdx : -1;
 }
 
 /**
@@ -70,8 +99,8 @@ export function alignText(
   }
 
   // Use the last N characters of recognized text as the search needle
-  // to handle incremental recognition
-  const needleLen = Math.min(normRecognized.length, 40);
+  // Longer needle = more context = better matching with ASR errors
+  const needleLen = Math.min(normRecognized.length, 80);
   const needle = normRecognized.slice(-needleLen);
 
   // Search in normalized source starting from approximate last position
@@ -95,6 +124,6 @@ export function alignText(
     originalIdx++;
   }
 
-  const confidence = Math.min(1, needleLen / 20);
+  const confidence = Math.min(1, needleLen / 30);
   return { charIndex: originalIdx, confidence };
 }
