@@ -64,6 +64,6 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
 
-  serverSettings: { asrWebSocketURL: 'ws://localhost:7860/ws/stream' },
+  serverSettings: { asrWebSocketURL: 'wss://192.168.9.207:7860/ws/stream' },
   setServerSettings: (serverSettings) => set({ serverSettings }),
 }));

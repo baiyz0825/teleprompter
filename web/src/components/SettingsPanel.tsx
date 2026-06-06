@@ -189,7 +189,7 @@ export default function SettingsPanel({ open, onClose }: Props) {
                       asrWebSocketURL: e.target.value,
                     })
                   }
-                  placeholder="ws://localhost:7860/ws/stream"
+                  placeholder="wss://192.168.9.207:7860/ws/stream"
                   className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2 text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-secondary)] outline-none transition-colors focus:border-[var(--color-accent)]"
                 />
               </div>
