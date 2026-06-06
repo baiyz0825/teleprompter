@@ -13,10 +13,13 @@ export interface AlignmentResult {
   confidence: number; // 0-1
 }
 
-const CLEAN_RE = /[\s　]+/g;
+// 保留中文、字母、数字，去除所有标点和空白
+// ASR 流式模型不输出标点，源稿件有标点，必须统一去除才能匹配
+const STRIP_RE = /[^a-zA-Z0-9一-鿿㐀-䶿]/g;
+const STRIP_TEST_RE = /[^a-zA-Z0-9一-鿿㐀-䶿]/; // 非 global 版本，用于 .test()
 
 function normalize(text: string): string {
-  return text.replace(CLEAN_RE, '');
+  return text.replace(STRIP_RE, '');
 }
 
 /** Get pinyin (without tone) for a Chinese character. Returns '' for non-CJK. */
@@ -140,13 +143,19 @@ export function alignText(
     return { charIndex: 0, confidence: 0 };
   }
 
+  // Convert lastPosition (original source index) to normalized source index
+  let lastNormPos = 0;
+  for (let i = 0; i < Math.min(lastPosition, sourceScript.length); i++) {
+    if (!STRIP_TEST_RE.test(sourceScript[i])) lastNormPos++;
+  }
+
   // Use the last N characters of recognized text as the search needle
   // Longer needle = more context = better matching with ASR errors
   const needleLen = Math.min(normRecognized.length, 80);
   const needle = normRecognized.slice(-needleLen);
 
   // Search in normalized source starting from approximate last position
-  const searchStart = Math.max(0, lastPosition - needleLen);
+  const searchStart = Math.max(0, lastNormPos - needleLen);
   const normPos = fuzzyFind(normSource, needle, searchStart);
 
   if (normPos === -1) {
@@ -155,12 +164,12 @@ export function alignText(
   }
 
   // Map normalized position back to original source position
-  // by counting characters
+  // by counting non-stripped characters
   let originalIdx = 0;
   let normIdx = 0;
   while (normIdx < normPos && originalIdx < sourceScript.length) {
     const ch = sourceScript[originalIdx];
-    if (!CLEAN_RE.test(ch)) {
+    if (!STRIP_TEST_RE.test(ch)) {
       normIdx++;
     }
     originalIdx++;
