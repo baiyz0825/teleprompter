@@ -1,10 +1,12 @@
 /**
  * Text alignment engine for ASR-to-script matching.
  *
- * Uses bigram (2-char sequence) sliding window matching:
- * Bigrams are robust to single-character ASR errors (homophones)
- * because adjacent pairs usually still match.
+ * Uses pinyin-aware character scoring:
+ * ASR homophone errors (弥漫 vs 弥望) are handled by comparing
+ * pinyin initials/finals instead of exact characters.
  */
+
+import PINYIN_MAP from './pinyin-map';
 
 export interface AlignmentResult {
   charIndex: number; // current position in source script (character index)
@@ -17,39 +19,80 @@ function normalize(text: string): string {
   return text.replace(CLEAN_RE, '');
 }
 
-/**
- * Generate bigrams (2-char sliding sequences) from text.
- * "abcdef" → ["ab", "bc", "cd", "de", "ef"]
- */
-function bigrams(text: string): string[] {
-  const result: string[] = [];
-  for (let i = 0; i < text.length - 1; i++) {
-    result.push(text.slice(i, i + 2));
+/** Get pinyin (without tone) for a Chinese character. Returns '' for non-CJK. */
+function getPinyin(ch: string): string {
+  const py = PINYIN_MAP[ch];
+  if (!py) return '';
+  // Strip tone digits (e.g. "mi2" → "mi", "wang4" → "wang")
+  return py.replace(/\d+$/, '');
+}
+
+/** Extract initial consonant from pinyin (e.g. "zh" from "zhuang"). */
+function getInitial(py: string): string {
+  const initials = ['zh', 'ch', 'sh', 'b', 'p', 'm', 'f', 'd', 't', 'n', 'l', 'g', 'k', 'h', 'j', 'q', 'x', 'r', 'z', 'c', 's', 'y', 'w'];
+  for (const init of initials) {
+    if (py.startsWith(init)) return init;
   }
-  return result;
+  return '';
+}
+
+/** Extract final (vowel part) from pinyin. */
+function getFinal(py: string): string {
+  return py.replace(/^(zh|ch|sh|[bpmfdtnlgkhjqxrczsyw])/, '');
+}
+
+/**
+ * Similarity between two pinyin strings. Returns 0-1 (1 = identical).
+ * - Same pinyin (homophones): 1.0
+ * - Same initial consonant: 0.4
+ * - Same final vowel: 0.3
+ * - Different: 0
+ */
+function pinyinSimilarity(py1: string, py2: string): number {
+  if (!py1 || !py2) return py1 === py2 ? 1 : 0;
+  if (py1 === py2) return 1;
+
+  const ini1 = getInitial(py1);
+  const ini2 = getInitial(py2);
+  const fin1 = getFinal(py1);
+  const fin2 = getFinal(py2);
+
+  if (ini1 === ini2 && fin1 === fin2) return 1;
+  if (ini1 === ini2) return 0.4;
+  if (fin1 === fin2 && fin1.length > 0) return 0.3;
+  return 0;
+}
+
+/**
+ * Similarity between two characters. Returns 0-1.
+ * Uses pinyin for CJK characters, exact match for others.
+ */
+function charSimilarity(a: string, b: string): number {
+  if (a === b) return 1;
+  const py1 = getPinyin(a);
+  const py2 = getPinyin(b);
+  if (py1 || py2) return pinyinSimilarity(py1, py2);
+  return 0;
 }
 
 /**
  * Score how well `needle` matches at position `pos` in `haystack`
- * using bigram overlap. Returns 0-1.
+ * using pinyin-aware character similarity. Returns 0-1.
  */
-function bigramScore(haystack: string, needle: string, pos: number): number {
-  let match = 0;
+function pinyinScore(haystack: string, needle: string, pos: number): number {
   let total = 0;
-  for (let i = 0; i < needle.length - 1; i++) {
-    if (pos + i + 1 >= haystack.length) break;
+  let score = 0;
+  for (let i = 0; i < needle.length; i++) {
+    if (pos + i >= haystack.length) break;
     total++;
-    const ng = needle.slice(i, i + 2);
-    const hg = haystack.slice(pos + i, pos + i + 2);
-    if (ng === hg) match++;
+    score += charSimilarity(needle[i], haystack[pos + i]);
   }
-  return total > 0 ? match / total : 0;
+  return total > 0 ? score / total : 0;
 }
 
 /**
  * Find the best match position of `needle` inside `haystack`
- * using bigram scoring. Searches within a window around `startFrom`
- * to avoid false matches at distant positions.
+ * using pinyin-aware scoring. Searches within a window around `startFrom`.
  */
 function fuzzyFind(haystack: string, needle: string, startFrom: number): number {
   if (needle.length === 0) return startFrom;
@@ -58,7 +101,6 @@ function fuzzyFind(haystack: string, needle: string, startFrom: number): number 
   const exactIdx = haystack.indexOf(needle, startFrom);
   if (exactIdx !== -1) return exactIdx;
 
-  // Bigram sliding window search
   // Constrain search range to avoid false matches far from expected position
   const searchStart = Math.max(0, startFrom - needle.length);
   const searchEnd = Math.min(haystack.length - needle.length, startFrom + needle.length * 3);
@@ -67,15 +109,15 @@ function fuzzyFind(haystack: string, needle: string, startFrom: number): number 
   let bestScore = 0;
 
   for (let i = searchStart; i <= searchEnd; i++) {
-    const score = bigramScore(haystack, needle, i);
+    const score = pinyinScore(haystack, needle, i);
     if (score > bestScore) {
       bestScore = score;
       bestIdx = i;
     }
   }
 
-  // Require at least 60% bigram overlap
-  return bestScore >= 0.6 ? bestIdx : -1;
+  // Require at least 50% pinyin similarity
+  return bestScore >= 0.5 ? bestIdx : -1;
 }
 
 /**
