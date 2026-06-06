@@ -131,6 +131,7 @@ export class AudioCapture {
 
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
+        sampleRate: this.targetRate,
         channelCount: 1,
         echoCancellation: true,
         noiseSuppression: true,
