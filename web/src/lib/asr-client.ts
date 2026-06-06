@@ -71,15 +71,16 @@ export class FunAsrClient {
       int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
 
-    // base64 编码
+    // base64 编码（分块处理避免单次字符串过大）
     const bytes = new Uint8Array(int16.buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
+    const CHUNK = 8192;
+    let base64 = '';
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
+      base64 += String.fromCharCode.apply(null, slice as unknown as number[]);
     }
-    const base64 = btoa(binary);
+    base64 = btoa(base64);
 
-    // 发送 JSON 格式
     this.ws.send(JSON.stringify({ type: 'audio', data: base64 }));
   }
 
@@ -97,7 +98,7 @@ export class FunAsrClient {
 }
 
 export interface AudioCaptureOptions {
-  sampleRate?: number; // default 16000
+  sampleRate?: number; // target sample rate, default 16000
   onAudioData: (pcmFloat32: ArrayBuffer) => void;
 }
 
@@ -105,35 +106,62 @@ export class AudioCapture {
   private stream: MediaStream | null = null;
   private audioCtx: AudioContext | null = null;
   private processor: ScriptProcessorNode | null = null;
+  private targetRate = 16000;
+
+  /**
+   * Linear interpolation resample from sourceRate → targetRate
+   */
+  private resample(input: Float32Array, sourceRate: number): Float32Array {
+    if (sourceRate === this.targetRate) return input;
+    const ratio = sourceRate / this.targetRate;
+    const outputLen = Math.floor(input.length / ratio);
+    const output = new Float32Array(outputLen);
+    for (let i = 0; i < outputLen; i++) {
+      const srcIdx = i * ratio;
+      const lo = Math.floor(srcIdx);
+      const hi = Math.min(lo + 1, input.length - 1);
+      const frac = srcIdx - lo;
+      output[i] = input[lo] * (1 - frac) + input[hi] * frac;
+    }
+    return output;
+  }
 
   async start(options: AudioCaptureOptions): Promise<void> {
-    const sampleRate = options.sampleRate ?? 16000;
+    this.targetRate = options.sampleRate ?? 16000;
 
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
-        sampleRate,
         channelCount: 1,
         echoCancellation: true,
         noiseSuppression: true,
       },
     });
 
-    this.audioCtx = new AudioContext({ sampleRate });
+    // AudioContext sampleRate is a hint — browsers may ignore it.
+    // Use the hardware rate and resample explicitly if needed.
+    this.audioCtx = new AudioContext();
+    const actualRate = this.audioCtx.sampleRate;
+    console.log(`[AudioCapture] 实际采样率: ${actualRate}Hz, 目标: ${this.targetRate}Hz`);
+
     const source = this.audioCtx.createMediaStreamSource(this.stream);
 
     // ScriptProcessorNode (deprecated but widely supported)
-    // bufferSize 4096, 1 input channel, 1 output channel
     this.processor = this.audioCtx.createScriptProcessor(4096, 1, 1);
     this.processor.onaudioprocess = (e) => {
       const inputData = e.inputBuffer.getChannelData(0);
-      // Copy the data (it gets reused)
-      const buffer = new ArrayBuffer(inputData.byteLength);
-      new Float32Array(buffer).set(inputData);
+      const resampled = this.resample(inputData, actualRate);
+      // Copy to a standalone ArrayBuffer (inputData is reused by the browser)
+      const buffer = new ArrayBuffer(resampled.byteLength);
+      new Float32Array(buffer).set(resampled);
       options.onAudioData(buffer);
     };
 
     source.connect(this.processor);
-    this.processor.connect(this.audioCtx.destination);
+    // Connect to a silent gain node — avoids mic audio playing back through speakers
+    const silent = this.audioCtx.createGain();
+    silent.gain.value = 0;
+    this.processor.connect(silent);
+    silent.connect(this.audioCtx.destination);
   }
 
   stop(): void {
