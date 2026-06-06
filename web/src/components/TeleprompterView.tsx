@@ -170,18 +170,25 @@ export default function TeleprompterView() {
       const client = new FunAsrClient();
       asrClientRef.current = client;
 
-      client.onResult = (text: string, isFinal: boolean) => {
-        setAsrText((prev) => (isFinal ? '' : prev + text));
+      client.onResult = (text: string, accumulated: string, isFinal: boolean) => {
+        // 使用服务端返回的 accumulated 文本（完整累积）
+        const fullText = accumulated || text;
+        setAsrText(fullText);
 
-        if (script) {
+        if (script && fullText) {
           const result = alignText(
             script.content,
-            asrText + text,
+            fullText,
             currentCharIndex,
           );
           if (result.confidence > 0.3) {
             setCurrentCharIndex(result.charIndex);
           }
+        }
+
+        // 最终结果后清空识别文本（一句结束）
+        if (isFinal) {
+          setTimeout(() => setAsrText(''), 1000);
         }
       };
 

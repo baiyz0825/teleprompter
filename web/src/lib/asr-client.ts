@@ -1,33 +1,24 @@
 export interface AsrClientOptions {
   url: string;
   model?: string;
-  language?: string;
 }
 
 export class FunAsrClient {
   private ws: WebSocket | null = null;
-  private streamStarted = false;
 
-  onResult: ((text: string, isFinal: boolean) => void) | null = null;
+  onResult: ((text: string, accumulated: string, isFinal: boolean) => void) | null = null;
   onError: ((error: string) => void) | null = null;
 
   async connect(options: AsrClientOptions): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
         this.ws = new WebSocket(options.url);
-        this.ws.binaryType = 'arraybuffer';
 
         this.ws.onopen = () => {
-          this.streamStarted = false;
-          // Send initial config
+          // 发送 config（协议要求的第一条消息）
           const config = {
-            mode: 'online',
-            chunk_size: [5, 10, 5],
-            wav_name: 'microphone',
-            is_speaking: true,
-            itn: true,
-            ...(options.model && { model: options.model }),
-            ...(options.language && { language: options.language }),
+            type: 'config',
+            model: options.model || 'paraformer-streaming',
           };
           this.ws!.send(JSON.stringify(config));
           resolve();
@@ -37,10 +28,20 @@ export class FunAsrClient {
           if (typeof event.data === 'string') {
             try {
               const result = JSON.parse(event.data);
-              if (result.text !== undefined) {
-                const isFinal = result.is_final === true || result.mode === '2pass-online';
-                this.onResult?.(result.text, isFinal);
+
+              if (result.type === 'error') {
+                this.onError?.(result.message || 'Unknown ASR error');
+                return;
               }
+
+              if (result.type === 'result') {
+                this.onResult?.(
+                  result.text || '',
+                  result.accumulated || '',
+                  result.is_final === true,
+                );
+              }
+              // config_ack 等其他消息类型忽略
             } catch { /* ignore parse errors */ }
           }
         };
@@ -59,23 +60,32 @@ export class FunAsrClient {
     });
   }
 
-  sendAudio(pcmData: ArrayBuffer): void {
+  sendAudio(pcmFloat32: ArrayBuffer): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    // Convert float32 PCM to int16 then base64
-    const float32 = new Float32Array(pcmData);
+
+    // Float32 PCM → Int16 PCM
+    const float32 = new Float32Array(pcmFloat32);
     const int16 = new Int16Array(float32.length);
     for (let i = 0; i < float32.length; i++) {
       const s = Math.max(-1, Math.min(1, float32[i]));
       int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
-    // Send as binary (raw int16 bytes)
-    this.ws.send(int16.buffer);
+
+    // base64 编码
+    const bytes = new Uint8Array(int16.buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
+
+    // 发送 JSON 格式
+    this.ws.send(JSON.stringify({ type: 'audio', data: base64 }));
   }
 
   end(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ is_speaking: false }));
-    this.streamStarted = false;
+    this.ws.send(JSON.stringify({ type: 'end' }));
   }
 
   disconnect(): void {
@@ -83,7 +93,6 @@ export class FunAsrClient {
       this.ws.close();
       this.ws = null;
     }
-    this.streamStarted = false;
   }
 }
 
