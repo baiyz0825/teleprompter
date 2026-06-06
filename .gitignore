@@ -1,0 +1,32 @@
+# Go
+teleprompter
+*.exe
+*.test
+*.out
+
+# SQLite
+teleprompter.db
+teleprompter.db-shm
+teleprompter.db-wal
+
+# TLS certs (auto-generated)
+cert.pem
+key.pem
+
+# Node
+web/node_modules/
+web/.vite/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
