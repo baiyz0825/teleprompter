@@ -137,11 +137,12 @@ export class AudioCapture {
       },
     });
 
-    // AudioContext sampleRate is a hint — browsers may ignore it.
-    // Use the hardware rate and resample explicitly if needed.
-    this.audioCtx = new AudioContext();
+    // 优先请求目标采样率，现代浏览器通常会尊重这个设置
+    this.audioCtx = new AudioContext({ sampleRate: this.targetRate });
     const actualRate = this.audioCtx.sampleRate;
-    console.log(`[AudioCapture] 实际采样率: ${actualRate}Hz, 目标: ${this.targetRate}Hz`);
+    if (actualRate !== this.targetRate) {
+      console.warn(`[AudioCapture] 浏览器未支持请求的采样率: 请求 ${this.targetRate}Hz, 实际 ${actualRate}Hz, 将进行重采样`);
+    }
 
     const source = this.audioCtx.createMediaStreamSource(this.stream);
 
