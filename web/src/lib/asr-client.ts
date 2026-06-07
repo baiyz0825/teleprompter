@@ -1,6 +1,5 @@
 export interface AsrClientOptions {
   url: string;
-  model?: string;
 }
 
 export class FunAsrClient {
@@ -15,12 +14,8 @@ export class FunAsrClient {
         this.ws = new WebSocket(options.url);
 
         this.ws.onopen = () => {
-          // 发送 config（协议要求的第一条消息）
-          const config = {
-            type: 'config',
-            model: options.model || 'paraformer-streaming',
-          };
-          this.ws!.send(JSON.stringify(config));
+          // 发送 config（协议要求的第一条消息，无需指定模型）
+          this.ws!.send(JSON.stringify({ type: 'config' }));
           resolve();
         };
 
