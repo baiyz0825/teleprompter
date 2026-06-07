@@ -95,6 +95,8 @@ export class FunAsrClient {
 export interface AudioCaptureOptions {
   sampleRate?: number; // target sample rate, default 16000
   onAudioData: (pcmFloat32: ArrayBuffer) => void;
+  /** 能量阈值：低于此值的音频视为静音/杂音，不发送。默认 0.01（约 -40dB） */
+  energyThreshold?: number;
 }
 
 export class AudioCapture {
@@ -102,6 +104,7 @@ export class AudioCapture {
   private audioCtx: AudioContext | null = null;
   private processor: ScriptProcessorNode | null = null;
   private targetRate = 16000;
+  private energyThreshold = 0.01;
 
   /**
    * Linear interpolation resample from sourceRate → targetRate
@@ -121,8 +124,19 @@ export class AudioCapture {
     return output;
   }
 
+  /** 计算音频 RMS 能量 */
+  private rmsEnergy(data: Float32Array): number {
+    if (data.length === 0) return 0;
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) {
+      sum += data[i] * data[i];
+    }
+    return Math.sqrt(sum / data.length);
+  }
+
   async start(options: AudioCaptureOptions): Promise<void> {
     this.targetRate = options.sampleRate ?? 16000;
+    this.energyThreshold = options.energyThreshold ?? 0.01;
 
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -147,6 +161,13 @@ export class AudioCapture {
     this.processor.onaudioprocess = (e) => {
       const inputData = e.inputBuffer.getChannelData(0);
       const resampled = this.resample(inputData, actualRate);
+
+      // 能量阈值过滤：静音/杂音不发送
+      const energy = this.rmsEnergy(resampled);
+      if (energy < this.energyThreshold) {
+        return; // 跳过静音帧
+      }
+
       // Copy to a standalone ArrayBuffer (inputData is reused by the browser)
       const buffer = new ArrayBuffer(resampled.byteLength);
       new Float32Array(buffer).set(resampled);

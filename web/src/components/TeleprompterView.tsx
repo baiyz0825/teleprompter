@@ -203,6 +203,7 @@ export default function TeleprompterView() {
       audioCaptureRef.current = capture;
       await capture.start({
         sampleRate: 16000,
+        energyThreshold: 0.015, // 能量阈值：低于此值的音频视为静音，不发送
         onAudioData: (pcm) => client.sendAudio(pcm),
       });
 
