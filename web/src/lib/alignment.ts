@@ -156,7 +156,20 @@ export function alignText(
 
   // Search in normalized source starting from approximate last position
   const searchStart = Math.max(0, lastNormPos - needleLen);
-  const normPos = fuzzyFind(normSource, needle, searchStart);
+  let normPos = fuzzyFind(normSource, needle, searchStart);
+
+  // Fallback: if full needle fails, try progressively shorter needles
+  // This handles cases where ASR made errors earlier but recent text is correct
+  if (normPos === -1 && needleLen > 10) {
+    for (let tryLen = needleLen - 1; tryLen >= Math.max(needleLen / 2, 5); tryLen--) {
+      const shortNeedle = normRecognized.slice(-tryLen);
+      const shortPos = fuzzyFind(normSource, shortNeedle, searchStart);
+      if (shortPos !== -1) {
+        normPos = shortPos + (needleLen - tryLen); // adjust for shorter needle
+        break;
+      }
+    }
+  }
 
   if (normPos === -1) {
     // Couldn't find a match; return last known position
