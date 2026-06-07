@@ -18,8 +18,29 @@ export interface AlignmentResult {
 const STRIP_RE = /[^a-zA-Z0-9一-鿿㐀-䶿]/g;
 const STRIP_TEST_RE = /[^a-zA-Z0-9一-鿿㐀-䶿]/; // 非 global 版本，用于 .test()
 
+// 中文数字 → 阿拉伯数字（ASR 常把数字读成中文）
+const CN_NUM_RE = /[零一二三四五六七八九十百千万亿]+/g;
+const CN_NUM_MAP: Record<string, string> = {
+  '零': '0', '一': '1', '二': '2', '三': '3', '四': '4',
+  '五': '5', '六': '6', '七': '7', '八': '8', '九': '9', '十': '10',
+};
+
+function cnToArabic(cn: string): string {
+  // 简单处理：逐字替换（对于连续数字如"二零二六" → "2026"）
+  let result = '';
+  for (const ch of cn) {
+    result += CN_NUM_MAP[ch] || ch;
+  }
+  return result;
+}
+
 function normalize(text: string): string {
-  return text.replace(STRIP_RE, '');
+  let s = text.replace(STRIP_RE, '');
+  // 中文数字 → 阿拉伯数字
+  s = s.replace(CN_NUM_RE, (match) => cnToArabic(match));
+  // 统一小写
+  s = s.toLowerCase();
+  return s;
 }
 
 /** Get pinyin (without tone) for a Chinese character. Returns '' for non-CJK. */
